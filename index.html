@@ -65,7 +65,7 @@ function createMovingBlock(index) {
   const prev = stack[stack.length - 1];
   const dir = index % 2 === 0 ? 1 : -1;
   return {
-    x: dir === 1 ? -prev.w : W,
+    x: dir === 1 ? (W / 2 - Math.min(W, 400) / 2 - prev.w) : (W / 2 + Math.min(W, 400) / 2),
     y: prev.y - BLOCK_HEIGHT,
     w: prev.w, dir,
     speed: Math.min(BASE_SPEED + score * SPEED_INCREMENT, MAX_SPEED),
