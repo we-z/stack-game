@@ -196,8 +196,13 @@ function update() {
 
   if (currentBlock) {
     currentBlock.x += currentBlock.dir * currentBlock.speed;
-    if (currentBlock.dir === 1 && currentBlock.x > W) { currentBlock.x = W; currentBlock.dir = -1; }
-    else if (currentBlock.dir === -1 && currentBlock.x + currentBlock.w < 0) { currentBlock.x = -currentBlock.w; currentBlock.dir = 1; }
+    // Limit travel to a reasonable range around center (max 400px total travel)
+    const maxTravel = Math.min(W, 400);
+    const center = W / 2;
+    const leftBound = center - maxTravel / 2 - currentBlock.w;
+    const rightBound = center + maxTravel / 2;
+    if (currentBlock.dir === 1 && currentBlock.x > rightBound) { currentBlock.x = rightBound; currentBlock.dir = -1; }
+    else if (currentBlock.dir === -1 && currentBlock.x < leftBound) { currentBlock.x = leftBound; currentBlock.dir = 1; }
   }
 
   // Smooth camera
