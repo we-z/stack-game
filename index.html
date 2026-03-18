@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Stack</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+document.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+
+const BLOCK_HEIGHT = 28;
+const BASE_SPEED = 1.5;
+const MAX_SPEED = 4.5;
+const SPEED_INCREMENT = 0.08;
+const PERFECT_TOLERANCE = 4;
+const GRAVITY = 0.4;
+
+let state = 'start';
+let score = 0;
+let highScore = 0;
+let combo = 0;
+let stack = [];
+let currentBlock = null;
+let fallingPieces = [];
+let particles = [];
+let cameraY = 0;
+let targetCameraY = 0;
+let cameraScale = 1;
+let targetCameraScale = 1;
+let shakeX = 0, shakeY = 0, shakeDuration = 0;
+let perfectText = null;
+let comboText = null;
+let flashAlpha = 0;
+let gameOverTimer = 0;
+let frameCount = 0;
+let scoreScale = 1;
+let scorePulseTimer = 0;
+let scorePopups = [];
+
+function createBaseBlock() {
+  const w = Math.min(200, W * 0.45);
+  return { x: (W - w) / 2, y: H - BLOCK_HEIGHT * 3, w: w };
+}
+
+function createMovingBlock(index) {
+  const prev = stack[stack.length - 1];
+  const dir = index % 2 === 0 ? 1 : -1;
+  return {
+    x: dir === 1 ? -prev.w : W,
+    y: prev.y - BLOCK_HEIGHT,
+    w: prev.w, dir,
+    speed: Math.min(BASE_SPEED + score * SPEED_INCREMENT, MAX_SPEED),
+    index, bounceScale: 0
+  };
+}
+
+function spawnParticles(x, y, w, count, strong) {
+  for (let i = 0; i < count; i++) {
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.4;
+    const speed = Math.random() * (strong ? 5 : 3) + 1.5;
+    particles.push({
+      x: x + Math.random() * w, y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      alpha: 1, size: Math.random() * 2.5 + 1, type: 'spark'
+    });
+  }
+}
+
+function spawnRing(x, y, w) {
+  particles.push({
+    x: x + w / 2, y, vx: 0, vy: 0,
+    alpha: 0.6, size: 0, type: 'ring', radius: 0, maxRadius: 100
+  });
+}
+
+function initGame() {
+  stack = []; fallingPieces = []; particles = []; scorePopups = [];
+  score = 0; combo = 0;
+  perfectText = null; comboText = null; flashAlpha = 0; scoreScale = 1;
+  cameraScale = 1; targetCameraScale = 1;
+  stack.push(createBaseBlock());
+  currentBlock = createMovingBlock(1);
+  // Set initial camera so the moving block is at the target position
+  targetCameraY = currentBlock.y - H * 0.45;
+  cameraY = targetCameraY;
+}
+
+function placeBlock() {
+  if (!currentBlock) return;
+  const prev = stack[stack.length - 1];
+  const left = Math.max(currentBlock.x, prev.x);
+  const right = Math.min(currentBlock.x + currentBlock.w, prev.x + prev.w);
+  const overlap = right - left;
+
+  if (overlap <= 0) {
+    fallingPieces.push({
+      x: currentBlock.x, y: currentBlock.y - cameraY,
+      w: currentBlock.w, h: BLOCK_HEIGHT,
+      vy: 0, vr: (Math.random() - 0.5) * 0.06, rotation: 0, alpha: 1
+    });
+    currentBlock = null; combo = 0;
+    state = 'over'; gameOverTimer = 0;
+    if (score > highScore) highScore = score;
+
+    // Calculate zoom-out to fit entire stack
+    if (stack.length > 1) {
+      const topY = stack[stack.length - 1].y;
+      const bottomY = stack[0].y + BLOCK_HEIGHT;
+      const stackHeight = bottomY - topY + BLOCK_HEIGHT * 2;
+      const padding = 80;
+      const availableH = H - padding * 2;
+      const neededScale = Math.min(1, availableH / stackHeight);
+      targetCameraScale = neededScale;
+      // Center the stack vertically when zoomed out
+      const stackMidY = (topY + bottomY) / 2;
+      targetCameraY = stackMidY - H / 2 / neededScale;
+    }
+    return;
+  }
+
+  const overhang = currentBlock.w - overlap;
+  const isPerfect = overhang < PERFECT_TOLERANCE;
+  let placedW, placedX;
+  const screenY = currentBlock.y - cameraY;
+
+  if (isPerfect) {
+    placedX = prev.x; placedW = prev.w; combo++;
+    if (combo >= 2) {
+      const maxW = Math.min(200, W * 0.45);
+      const grow = Math.min(20, maxW - placedW);
+      if (grow > 0) { placedW += grow; placedX -= grow / 2; }
+    }
+    perfectText = { y: screenY - 30, alpha: 1, scale: 2.0, timer: 0 };
+    flashAlpha = 0.15;
+    if (combo >= 3) comboText = { y: screenY - 60, alpha: 1, scale: 1.8, timer: 0, combo };
+    spawnParticles(prev.x, screenY, prev.w, 25, true);
+    spawnRing(prev.x, screenY, prev.w);
+    shakeDuration = 8; shakeX = (Math.random() - 0.5) * 5; shakeY = (Math.random() - 0.5) * 5;
+  } else {
+    placedX = left; placedW = overlap; combo = 0;
+    const sliceX = currentBlock.x < prev.x ? currentBlock.x : prev.x + prev.w;
+    fallingPieces.push({
+      x: sliceX, y: screenY, w: overhang, h: BLOCK_HEIGHT,
+      vy: 0, vr: (currentBlock.x < prev.x ? -1 : 1) * 0.04, rotation: 0, alpha: 1
+    });
+    spawnParticles(placedX, screenY, placedW, 6, false);
+    shakeDuration = 5; shakeX = (Math.random() - 0.5) * 2.5; shakeY = (Math.random() - 0.5) * 2.5;
+  }
+
+  stack.push({ x: placedX, y: currentBlock.y, w: placedW, bounceScale: 1.12 });
+  score++; scoreScale = 1.4; scorePulseTimer = 15;
+
+  const pts = isPerfect ? (combo >= 3 ? `+${combo}` : '+2') : '+1';
+  scorePopups.push({
+    x: placedX + placedW / 2, y: screenY - 10,
+    text: pts, alpha: 1, vy: -1.5, scale: isPerfect ? 1.3 : 1
+  });
+
+  currentBlock = createMovingBlock(stack.length);
+  // Always track the moving block to keep it centered vertically
+  targetCameraY = currentBlock.y - H * 0.45;
+}
+
+function handleInput() {
+  if (state === 'start') { state = 'playing'; placeBlock(); }
+  else if (state === 'playing') placeBlock();
+  else if (state === 'over' && gameOverTimer > 40) { state = 'start'; initGame(); }
+}
+
+canvas.addEventListener('mousedown', handleInput);
+canvas.addEventListener('touchstart', handleInput);
+window.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); handleInput(); } });
+
+function update() {
+  frameCount++;
+
+  if (currentBlock) {
+    currentBlock.x += currentBlock.dir * currentBlock.speed;
+    if (currentBlock.dir === 1 && currentBlock.x > W) { currentBlock.x = W; currentBlock.dir = -1; }
+    else if (currentBlock.dir === -1 && currentBlock.x + currentBlock.w < 0) { currentBlock.x = -currentBlock.w; currentBlock.dir = 1; }
+  }
+
+  // Smooth camera
+  cameraY += (targetCameraY - cameraY) * 0.08;
+  cameraScale += (targetCameraScale - cameraScale) * 0.04;
+
+  if (shakeDuration > 0) { shakeDuration--; shakeX *= 0.65; shakeY *= 0.65; }
+  else { shakeX = 0; shakeY = 0; }
+
+  for (let i = fallingPieces.length - 1; i >= 0; i--) {
+    const p = fallingPieces[i];
+    p.vy += GRAVITY; p.y += p.vy; p.rotation += p.vr; p.alpha -= 0.015;
+    if (p.alpha <= 0 || p.y > H + 100) fallingPieces.splice(i, 1);
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    if (p.type === 'ring') {
+      p.radius += 3.5; p.alpha -= 0.018;
+      if (p.alpha <= 0 || p.radius >= p.maxRadius) { particles.splice(i, 1); continue; }
+    } else {
+      p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.alpha -= 0.022;
+      if (p.alpha <= 0) { particles.splice(i, 1); continue; }
+    }
+  }
+
+  for (let i = scorePopups.length - 1; i >= 0; i--) {
+    const p = scorePopups[i];
+    p.y += p.vy; p.alpha -= 0.018; p.scale *= 0.995;
+    if (p.alpha <= 0) scorePopups.splice(i, 1);
+  }
+
+  for (const b of stack) {
+    if (b.bounceScale && b.bounceScale > 1) {
+      b.bounceScale = 1 + (b.bounceScale - 1) * 0.82;
+      if (b.bounceScale < 1.001) b.bounceScale = 1;
+    }
+  }
+
+  if (perfectText) {
+    perfectText.timer++;
+    if (perfectText.timer > 12) perfectText.alpha -= 0.04;
+    perfectText.y -= 0.7;
+    perfectText.scale += (1 - perfectText.scale) * 0.12;
+    if (perfectText.alpha <= 0) perfectText = null;
+  }
+
+  if (comboText) {
+    comboText.timer++;
+    if (comboText.timer > 15) comboText.alpha -= 0.035;
+    comboText.y -= 0.5;
+    comboText.scale += (1 - comboText.scale) * 0.1;
+    if (comboText.alpha <= 0) comboText = null;
+  }
+
+  if (flashAlpha > 0) flashAlpha *= 0.9;
+  if (scorePulseTimer > 0) { scorePulseTimer--; scoreScale += (1 - scoreScale) * 0.15; } else scoreScale = 1;
+  if (state === 'over') gameOverTimer++;
+}
+
+function drawBlock(x, y, w, h, scale) {
+  ctx.save();
+  if (scale && scale !== 1) {
+    const cx = x + w / 2, cy = y + h / 2;
+    ctx.translate(cx, cy); ctx.scale(scale, scale); ctx.translate(-cx, -cy);
+  }
+  ctx.fillStyle = '#eee';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.fillRect(x, y, w, 1.5);
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(x, y + h - 1.5, w, 1.5);
+  ctx.restore();
+}
+
+function drawText(text, x, y, size, alpha) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, alpha);
+  ctx.font = `bold ${size}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#eee';
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+function render() {
+  // Clear with black
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+
+  // Apply camera zoom (scale from center of screen)
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(cameraScale, cameraScale);
+  ctx.translate(-W / 2, -H / 2);
+
+  // Stack
+  for (const b of stack) {
+    const sy = b.y - cameraY;
+    drawBlock(b.x, sy, b.w, BLOCK_HEIGHT, b.bounceScale || 1);
+  }
+
+  // Current block
+  if (currentBlock) {
+    const sy = currentBlock.y - cameraY;
+    drawBlock(currentBlock.x, sy, currentBlock.w, BLOCK_HEIGHT, 1);
+  }
+
+  // Falling pieces
+  for (const p of fallingPieces) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.alpha);
+    ctx.translate(p.x + p.w / 2, p.y + p.h / 2);
+    ctx.rotate(p.rotation);
+    ctx.fillStyle = '#eee';
+    ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    ctx.restore();
+  }
+
+  // Particles
+  for (const p of particles) {
+    if (p.type === 'ring') {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.alpha);
+      ctx.strokeStyle = '#eee';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.alpha);
+      ctx.fillStyle = '#eee';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Score popups
+  for (const p of scorePopups) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, p.alpha);
+    ctx.font = `bold ${Math.round(18 * p.scale)}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+    ctx.textAlign = 'center'; ctx.fillStyle = '#eee';
+    ctx.fillText(p.text, p.x, p.y);
+    ctx.restore();
+  }
+
+  ctx.restore(); // end camera transform
+
+  // Flash (white flash on black bg) — drawn in screen space
+  if (flashAlpha > 0.005) {
+    ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Perfect text — screen space
+  if (perfectText) {
+    const s = Math.round(28 * perfectText.scale);
+    drawText('PERFECT', W / 2, perfectText.y, s, perfectText.alpha);
+  }
+
+  // Combo text — screen space
+  if (comboText) {
+    const s = Math.round(22 * comboText.scale);
+    drawText(`COMBO x${comboText.combo}`, W / 2, comboText.y, s, comboText.alpha);
+  }
+
+  // Score — screen space
+  if (state === 'playing') {
+    ctx.save();
+    ctx.translate(W / 2, 80); ctx.scale(scoreScale, scoreScale); ctx.translate(-W / 2, -80);
+    ctx.font = 'bold 96px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#eee';
+    ctx.fillText(score, W / 2, 80);
+    ctx.restore();
+  }
+
+  // START SCREEN
+  if (state === 'start') {
+    const ty = H * 0.3;
+    ctx.font = 'bold 80px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#eee';
+    ctx.fillText('STACK', W / 2, ty);
+
+    ctx.fillStyle = '#eee';
+    ctx.fillRect(W / 2 - 40, ty + 30, 80, 2);
+
+    const subAlpha = 0.4 + 0.25 * Math.sin(frameCount * 0.05);
+    drawText('Tap to Start', W / 2, ty + 60, 18, subAlpha);
+
+    if (highScore > 0) drawText(`Best: ${highScore}`, W / 2, ty + 95, 15, 0.35);
+  }
+
+  // GAME OVER SCREEN
+  if (state === 'over') {
+    const t = Math.min(gameOverTimer / 35, 1);
+    const eased = 1 - Math.pow(1 - t, 3);
+
+    ctx.fillStyle = `rgba(0,0,0,${eased * 0.5})`;
+    ctx.fillRect(0, 0, W, H);
+
+    const cy = H * 0.25;
+    const goY = cy - 20 + eased * 20;
+
+    ctx.save();
+    ctx.globalAlpha = eased;
+    ctx.font = 'bold 44px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#eee';
+    ctx.fillText('GAME OVER', W / 2, goY);
+    ctx.fillRect(W / 2 - 35, goY + 22, 70, 2);
+    ctx.restore();
+
+    if (t > 0.2) {
+      const st = Math.min((gameOverTimer - 7) / 20, 1);
+      const se = 1 - Math.pow(1 - st, 3);
+      ctx.save();
+      const ss = 0.5 + se * 0.5;
+      ctx.translate(W / 2, goY + 75); ctx.scale(ss, ss); ctx.translate(-W / 2, -(goY + 75));
+      drawText(String(score), W / 2, goY + 75, 68, se);
+      ctx.restore();
+    }
+
+    if (t > 0.4) {
+      const bt = Math.min((gameOverTimer - 14) / 20, 1);
+      const isNew = score === highScore && score > 0;
+      const label = isNew ? `NEW BEST: ${highScore}` : `Best: ${highScore}`;
+      drawText(label, W / 2, goY + 125, 16, bt * 0.5);
+    }
+
+    if (gameOverTimer > 40) {
+      const rt = Math.min((gameOverTimer - 40) / 20, 1);
+      const ra = rt * (0.4 + 0.25 * Math.sin(frameCount * 0.05));
+      drawText('Tap to Restart', W / 2, goY + 170, 18, ra);
+    }
+  }
+}
+
+function loop() { update(); render(); requestAnimationFrame(loop); }
+initGame();
+loop();
+</script>
+</body>
+</html>
